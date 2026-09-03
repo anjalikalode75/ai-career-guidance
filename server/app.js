@@ -1,0 +1,180 @@
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import { getAIChatResponse, getAICareerEnrichment } from './services/aiService.js';
+import { CAREERS_DATA } from '../src/data/careersData.js';
+import { calculateCareerMatches } from '../src/utils/scoringEngine.js';
+
+// Setup environment variables
+dotenv.config();
+
+const app = express();
+
+// Middlewares
+app.use(cors());
+app.use(express.json());
+
+// Logger middleware
+app.use((req, res, next) => {
+  if (req.url.startsWith('/api/') || req.url.startsWith('/chat') || req.url.startsWith('/health')) {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  }
+  next();
+});
+
+// Router supporting both prefixed (/api/...) and non-prefixed (/...) paths for Vercel compatibility
+const apiRouter = express.Router();
+
+// Health check endpoint
+apiRouter.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    environment: process.env.NODE_ENV || 'development',
+    time: new Date()
+  });
+});
+
+// 1. AI Enrichment endpoint for Results Page
+apiRouter.post('/recommend/enrich', async (req, res) => {
+  const { profile } = req.body;
+  
+  if (!profile) {
+    return res.status(400).json({ success: false, error: 'Profile is required' });
+  }
+
+  const matches = calculateCareerMatches(profile, CAREERS_DATA);
+  if (!matches || matches.length === 0) {
+    return res.status(400).json({ success: false, error: 'Failed to calculate matches' });
+  }
+
+  const topMatch = matches[0];
+
+  try {
+    const enriched = await getAICareerEnrichment({
+      profile,
+      topMatchName: topMatch.name,
+      matchPercentage: topMatch.matchPercentage,
+      description: topMatch.description
+    });
+
+    return res.json({
+      success: true,
+      fallback: false,
+      advice: enriched.advice,
+      strategy: enriched.strategy,
+      comparison: enriched.comparison
+    });
+
+  } catch (error) {
+    console.warn(`[AI Fallback] Failed to enrich via AI: ${error.message}. Returning local recommendation.`);
+    
+    return res.json({
+      success: true,
+      fallback: true,
+      advice: topMatch.whySuitabilityExplanation,
+      strategy: `Prioritize learning missing technologies: ${(topMatch.requiredSkills || []).filter(s => (profile.skills?.[s] === undefined)).join(', ')}. Focus on building hands-on projects to solidify these.`,
+      comparison: `A career as a ${topMatch.name} offers strong growth. Compared to other paths, it aligns directly with your strengths in ${Array.isArray(profile.strengths) ? profile.strengths.join(', ') : 'problem solving'}.`
+    });
+  }
+});
+
+// 2. AI Chatbot Coach Endpoint (Supports both Streaming SSE & standard JSON)
+apiRouter.post('/chat', async (req, res) => {
+  const t0 = Date.now();
+  const { messages, profile, stream } = req.body;
+
+  if (!messages || !Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ success: false, error: 'Messages list is required and must be a non-empty array' });
+  }
+
+  const timing = {};
+  const lastUserMsg = messages[messages.length - 1]?.content?.substring(0, 60) || '';
+  console.log(`[CHAT] Request received: "${lastUserMsg}" (context: ${messages.length} msgs)`);
+
+  // Handle Server-Sent Events (SSE) Streaming
+  if (stream === true) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    try {
+      console.log(`[CHAT] Gemini streaming request started...`);
+      const fullReply = await getAIChatResponse({
+        messages,
+        profile,
+        timing,
+        onChunk: (chunkText) => {
+          res.write(`data: ${JSON.stringify({ chunk: chunkText })}\n\n`);
+        }
+      });
+
+      const totalMs = Date.now() - t0;
+      console.log(`[CHAT] Context prepared: ${timing.contextPrepMs || 0} ms`);
+      console.log(`[CHAT] Gemini first chunk: ${timing.firstChunkMs || 0} ms`);
+      console.log(`[CHAT] Gemini total response: ${timing.geminiMs || 0} ms (model: ${timing.modelUsed})`);
+      console.log(`[CHAT] Total: ${totalMs} ms`);
+
+      res.write(`data: ${JSON.stringify({ done: true, fullContent: fullReply })}\n\n`);
+      return res.end();
+
+    } catch (error) {
+      console.error(`[CHAT Error] Streaming failed:`, error.message || error);
+      res.write(`data: ${JSON.stringify({ error: 'AI assistant temporarily unavailable. Please retry.' })}\n\n`);
+      return res.end();
+    }
+  }
+
+  // Handle Standard Fast JSON Response
+  try {
+    console.log(`[CHAT] Gemini request started...`);
+    const reply = await getAIChatResponse({ messages, profile, timing });
+    const totalMs = Date.now() - t0;
+
+    console.log(`[CHAT] Context prepared: ${timing.contextPrepMs || 0} ms`);
+    if (timing.cacheHit) {
+      console.log(`[CHAT] Cache HIT! Responded in ${totalMs} ms`);
+    } else {
+      console.log(`[CHAT] Gemini response received: ${timing.geminiMs || 0} ms (model: ${timing.modelUsed})`);
+      console.log(`[CHAT] Total: ${totalMs} ms`);
+    }
+
+    return res.json({
+      success: true,
+      fallback: false,
+      message: {
+        role: 'assistant',
+        content: reply
+      }
+    });
+
+  } catch (error) {
+    console.error(`[AI Error] Chat API failed:`, error.message || error);
+
+    const isMissingKey = error.code === 'NO_API_KEYS_CONFIGURED' || error.message === 'AI_API_KEY_MISSING';
+    const isQuotaExceeded = error.status === 429 || (error.message && error.message.includes('Resource has been exhausted'));
+
+    let userMessage = 'AI assistant is temporarily unavailable. Please try again shortly.';
+    let errorCode = 'AI_SERVICE_ERROR';
+
+    if (isMissingKey) {
+      userMessage = 'AI API key is not configured on the server. Please check your backend environment variables.';
+      errorCode = 'MISSING_API_KEY';
+    } else if (isQuotaExceeded) {
+      userMessage = 'AI service quota has been temporarily reached. Please wait a moment and retry.';
+      errorCode = 'QUOTA_EXCEEDED';
+    }
+
+    return res.status(503).json({
+      success: false,
+      error: userMessage,
+      code: errorCode
+    });
+  }
+});
+
+// Mount router on BOTH '/api' AND '/' to guarantee compatibility with any serverless proxy rewrite
+app.use('/api', apiRouter);
+app.use('/', apiRouter);
+
+export default app;
