@@ -16,10 +16,7 @@ app.use(express.json());
 
 // Normalize URL for Vercel serverless rewrites
 app.use((req, res, next) => {
-  if (req.url.startsWith('/api/') || req.url.startsWith('/chat') || req.url.startsWith('/health')) {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  }
-  // If serverless rewrite stripped the path (e.g. req.url is '/' but originalUrl has path)
+  // If serverless rewrite stripped the subpath (e.g. req.url is '/' but originalUrl has path)
   if ((req.url === '/' || req.url === '/api') && req.originalUrl && req.originalUrl !== '/' && req.originalUrl !== '/api') {
     req.url = req.originalUrl;
   }
@@ -29,18 +26,23 @@ app.use((req, res, next) => {
 // Router supporting both prefixed (/api/...) and non-prefixed (/...) paths for Vercel compatibility
 const apiRouter = express.Router();
 
-// Health check endpoint
-apiRouter.get('/health', (req, res) => {
+// Health check handler
+const handleHealth = (req, res) => {
   res.json({
     status: 'ok',
     environment: process.env.NODE_ENV || 'development',
     hasGeminiKey: !!(process.env.GEMINI_API_KEY || '').trim(),
     time: new Date()
   });
+};
+
+apiRouter.get('/health', handleHealth);
+apiRouter.get('/', (req, res) => {
+  return handleHealth(req, res);
 });
 
-// 1. AI Enrichment endpoint for Results Page
-apiRouter.post('/recommend/enrich', async (req, res) => {
+// 1. AI Enrichment handler for Results Page
+const handleEnrich = async (req, res) => {
   const { profile } = req.body;
   
   if (!profile) {
@@ -81,10 +83,12 @@ apiRouter.post('/recommend/enrich', async (req, res) => {
       comparison: `A career as a ${topMatch.name} offers strong growth. Compared to other paths, it aligns directly with your strengths in ${Array.isArray(profile.strengths) ? profile.strengths.join(', ') : 'problem solving'}.`
     });
   }
-});
+};
 
-// 2. AI Chatbot Coach Endpoint (Fast, reliable JSON)
-apiRouter.post('/chat', async (req, res) => {
+apiRouter.post('/recommend/enrich', handleEnrich);
+
+// 2. AI Chatbot Coach Handler (Fast, reliable JSON)
+const handleChat = async (req, res) => {
   const t0 = Date.now();
   const { messages, profile } = req.body;
 
@@ -136,6 +140,16 @@ apiRouter.post('/chat', async (req, res) => {
       code: errorCode
     });
   }
+};
+
+apiRouter.post('/chat', handleChat);
+
+// Fallback: If POST body contains messages, treat as chat regardless of rewritten URL path
+apiRouter.post('/', (req, res, next) => {
+  if (req.body && Array.isArray(req.body.messages)) {
+    return handleChat(req, res);
+  }
+  next();
 });
 
 // Mount router on BOTH '/api' AND '/' to guarantee compatibility with any serverless proxy rewrite
