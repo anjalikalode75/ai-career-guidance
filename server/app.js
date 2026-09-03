@@ -14,10 +14,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Logger middleware
+// Normalize URL for Vercel serverless rewrites
 app.use((req, res, next) => {
   if (req.url.startsWith('/api/') || req.url.startsWith('/chat') || req.url.startsWith('/health')) {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  }
+  // If serverless rewrite stripped the path (e.g. req.url is '/' but originalUrl has path)
+  if ((req.url === '/' || req.url === '/api') && req.originalUrl && req.originalUrl !== '/' && req.originalUrl !== '/api') {
+    req.url = req.originalUrl;
   }
   next();
 });
@@ -30,6 +34,7 @@ apiRouter.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     environment: process.env.NODE_ENV || 'development',
+    hasGeminiKey: !!(process.env.GEMINI_API_KEY || '').trim(),
     time: new Date()
   });
 });
@@ -78,10 +83,10 @@ apiRouter.post('/recommend/enrich', async (req, res) => {
   }
 });
 
-// 2. AI Chatbot Coach Endpoint (Supports both Streaming SSE & standard JSON)
+// 2. AI Chatbot Coach Endpoint (Fast, reliable JSON)
 apiRouter.post('/chat', async (req, res) => {
   const t0 = Date.now();
-  const { messages, profile, stream } = req.body;
+  const { messages, profile } = req.body;
 
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ success: false, error: 'Messages list is required and must be a non-empty array' });
@@ -91,53 +96,11 @@ apiRouter.post('/chat', async (req, res) => {
   const lastUserMsg = messages[messages.length - 1]?.content?.substring(0, 60) || '';
   console.log(`[CHAT] Request received: "${lastUserMsg}" (context: ${messages.length} msgs)`);
 
-  // Handle Server-Sent Events (SSE) Streaming
-  if (stream === true) {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders?.();
-
-    try {
-      console.log(`[CHAT] Gemini streaming request started...`);
-      const fullReply = await getAIChatResponse({
-        messages,
-        profile,
-        timing,
-        onChunk: (chunkText) => {
-          res.write(`data: ${JSON.stringify({ chunk: chunkText })}\n\n`);
-        }
-      });
-
-      const totalMs = Date.now() - t0;
-      console.log(`[CHAT] Context prepared: ${timing.contextPrepMs || 0} ms`);
-      console.log(`[CHAT] Gemini first chunk: ${timing.firstChunkMs || 0} ms`);
-      console.log(`[CHAT] Gemini total response: ${timing.geminiMs || 0} ms (model: ${timing.modelUsed})`);
-      console.log(`[CHAT] Total: ${totalMs} ms`);
-
-      res.write(`data: ${JSON.stringify({ done: true, fullContent: fullReply })}\n\n`);
-      return res.end();
-
-    } catch (error) {
-      console.error(`[CHAT Error] Streaming failed:`, error.message || error);
-      res.write(`data: ${JSON.stringify({ error: 'AI assistant temporarily unavailable. Please retry.' })}\n\n`);
-      return res.end();
-    }
-  }
-
-  // Handle Standard Fast JSON Response
   try {
-    console.log(`[CHAT] Gemini request started...`);
     const reply = await getAIChatResponse({ messages, profile, timing });
     const totalMs = Date.now() - t0;
 
-    console.log(`[CHAT] Context prepared: ${timing.contextPrepMs || 0} ms`);
-    if (timing.cacheHit) {
-      console.log(`[CHAT] Cache HIT! Responded in ${totalMs} ms`);
-    } else {
-      console.log(`[CHAT] Gemini response received: ${timing.geminiMs || 0} ms (model: ${timing.modelUsed})`);
-      console.log(`[CHAT] Total: ${totalMs} ms`);
-    }
+    console.log(`[CHAT] Total: ${totalMs} ms (model: ${timing.modelUsed || 'cache'})`);
 
     return res.json({
       success: true,
@@ -154,15 +117,17 @@ apiRouter.post('/chat', async (req, res) => {
     const isMissingKey = error.code === 'NO_API_KEYS_CONFIGURED' || error.message === 'AI_API_KEY_MISSING';
     const isQuotaExceeded = error.status === 429 || (error.message && error.message.includes('Resource has been exhausted'));
 
-    let userMessage = 'AI assistant is temporarily unavailable. Please try again shortly.';
+    let userMessage = 'The AI assistant is temporarily unavailable. Please try again shortly.';
     let errorCode = 'AI_SERVICE_ERROR';
 
     if (isMissingKey) {
-      userMessage = 'AI API key is not configured on the server. Please check your backend environment variables.';
+      userMessage = 'GEMINI_API_KEY is not configured on Vercel. Please add GEMINI_API_KEY in your Vercel Project Settings > Environment Variables.';
       errorCode = 'MISSING_API_KEY';
     } else if (isQuotaExceeded) {
-      userMessage = 'AI service quota has been temporarily reached. Please wait a moment and retry.';
+      userMessage = 'Gemini API quota has been reached. Please wait a moment and retry.';
       errorCode = 'QUOTA_EXCEEDED';
+    } else if (error.message) {
+      userMessage = `AI Assistant Error: ${error.message}`;
     }
 
     return res.status(503).json({

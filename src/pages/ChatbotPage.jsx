@@ -236,7 +236,7 @@ export default function ChatbotPage({ profile }) {
     setMessages(nextMessages);
     setIsLoading(true);
 
-    // Prepare compact profile payload (avoids sending huge metadata)
+    // Prepare compact profile payload (avoids sending unnecessary metadata)
     const compactProfile = profile
       ? {
           name: profile.name,
@@ -250,7 +250,7 @@ export default function ChatbotPage({ profile }) {
       : null;
 
     try {
-      // Start AI request IMMEDIATELY (Do NOT block on Firestore save!)
+      // Direct fast API request
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -258,83 +258,28 @@ export default function ChatbotPage({ profile }) {
         },
         body: JSON.stringify({
           messages: nextMessages,
-          profile: compactProfile,
-          stream: true
+          profile: compactProfile
         }),
       });
 
-      const contentType = response.headers.get('content-type') || '';
+      const data = await response.json().catch(() => null);
 
-      // Handle Streaming response
-      if (response.ok && contentType.includes('text/event-stream') && response.body) {
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let accumulatedReply = '';
-        let hasInitializedBubble = false;
+      if (response.ok && data && data.success && data.message) {
+        const updatedMessages = [...nextMessages, data.message];
+        // Display completed message immediately
+        setMessages(updatedMessages);
 
-        // Initialize empty assistant message placeholder
-        setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
-        setIsLoading(false); // Stop typing indicator as stream starts
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          const textChunk = decoder.decode(value, { stream: true });
-          const lines = textChunk.split('\n');
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const parsed = JSON.parse(line.substring(6));
-                if (parsed.chunk) {
-                  accumulatedReply += parsed.chunk;
-                  setMessages((prev) => {
-                    const copy = [...prev];
-                    copy[copy.length - 1] = {
-                      role: 'assistant',
-                      content: accumulatedReply
-                    };
-                    return copy;
-                  });
-                } else if (parsed.done) {
-                  accumulatedReply = parsed.fullContent || accumulatedReply;
-                } else if (parsed.error) {
-                  throw new Error(parsed.error);
-                }
-              } catch (e) {
-                // Ignore SSE framing parser errors on partial lines
-              }
-            }
-          }
-        }
-
-        // Save complete updated conversation to Firestore in background (non-blocking)
-        const finalMessages = [...nextMessages, { role: 'assistant', content: accumulatedReply }];
-        saveChatHistory(user.uid, finalMessages).catch((dbErr) => {
-          console.warn('Background Firestore save failed:', dbErr);
+        // Save to Firestore asynchronously in background (zero blocking)
+        saveChatHistory(user.uid, updatedMessages).catch((dbErr) => {
+          console.warn('Background Firestore save notice:', dbErr.message);
         });
-
       } else {
-        // Handle Standard JSON response
-        const data = await response.json();
-
-        if (response.ok && data.success && data.message) {
-          const updatedMessages = [...nextMessages, data.message];
-          // Display immediately
-          setMessages(updatedMessages);
-
-          // Save to Firestore asynchronously in background (zero UI waiting)
-          saveChatHistory(user.uid, updatedMessages).catch((dbErr) => {
-            console.warn('Background Firestore save failed:', dbErr);
-          });
-        } else {
-          throw new Error(data.error || `Server responded with status ${response.status}`);
-        }
+        const errorDetail = data?.error || `Server responded with status ${response.status}`;
+        throw new Error(errorDetail);
       }
     } catch (err) {
       console.error('Chat error:', err);
-      setErrorMsg(err.message || 'Unable to reach the AI assistant. Please retry.');
+      setErrorMsg(err.message || 'Unable to reach the AI assistant. Please check your connection.');
       setLastFailedQuery(text);
     } finally {
       setIsLoading(false);
@@ -409,7 +354,7 @@ export default function ChatbotPage({ profile }) {
             <div>
               <h2 className="font-bold text-slate-800 text-sm">FutureAlign AI Coach</h2>
               <span className="text-[10px] text-slate-400 font-semibold block">
-                Ultra-Fast Streaming • {profile ? `${profile.name} (Active Profile)` : 'General Assistant'}
+                Ultra-Fast AI • {profile ? `${profile.name} (Active Profile)` : 'General Assistant'}
               </span>
             </div>
           </div>
@@ -454,14 +399,7 @@ export default function ChatbotPage({ profile }) {
                   }`}
                 >
                   {isAI ? (
-                    msg.content ? (
-                      <FormattedMessage content={msg.content} />
-                    ) : (
-                      <div className="flex items-center space-x-2 text-slate-400 text-xs">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-600" />
-                        <span>Streaming response...</span>
-                      </div>
-                    )
+                    <FormattedMessage content={msg.content} />
                   ) : (
                     <div className="whitespace-pre-wrap">{msg.content}</div>
                   )}
@@ -516,7 +454,7 @@ export default function ChatbotPage({ profile }) {
 
         {/* Error Alert with Retry */}
         {errorMsg && (
-          <div className="px-6 py-2 bg-rose-50 border-t border-rose-200 flex items-center justify-between text-rose-700 text-xs shrink-0">
+          <div className="px-6 py-3 bg-rose-50 border-t border-rose-200 flex items-center justify-between text-rose-700 text-xs shrink-0">
             <div className="flex items-center space-x-2">
               <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
               <span className="font-medium">{errorMsg}</span>
@@ -525,7 +463,7 @@ export default function ChatbotPage({ profile }) {
               <button
                 onClick={handleRetry}
                 disabled={isLoading}
-                className="flex items-center space-x-1 font-bold text-rose-700 hover:text-rose-900 bg-rose-100/70 hover:bg-rose-200 px-2 py-1 rounded transition-colors cursor-pointer"
+                className="flex items-center space-x-1 font-bold text-rose-700 hover:text-rose-900 bg-rose-100/70 hover:bg-rose-200 px-2.5 py-1 rounded transition-colors cursor-pointer"
               >
                 <RotateCcw className="h-3 w-3" />
                 <span>Retry</span>

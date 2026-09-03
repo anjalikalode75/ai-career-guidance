@@ -11,7 +11,7 @@ const FAST_GEMINI_MODELS = [
   'gemini-3.6-flash'
 ];
 
-// Simple in-memory LRU cache for non-personalized, single-turn general queries
+// Simple in-memory cache for non-personalized, single-turn general queries
 const queryCache = new Map();
 const CACHE_MAX_SIZE = 50;
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -57,21 +57,21 @@ function buildCompactSystemPrompt(profile) {
     profileSnippet = `\nSTUDENT CONTEXT: ${profile.name || 'Student'}, ${profile.degree || ''} ${profile.branch || ''} (${profile.year || ''}). Goal: ${profile.goal || 'Software Dev'}. Skills: ${skills || 'Beginner'}.`;
   }
 
-  return `You are FutureAlign AI Career Coach, a fast, knowledgeable, and practical tech mentor.
+  return `You are FutureAlign AI Career Coach, an intelligent, fast, knowledgeable, and practical tech mentor.
 CAPABILITIES:
-- Answer general questions accurately and concisely.
-- Programming: Write clean, idiomatic code (Java, Python, JS, C++, etc.) with time/space complexity.
-- Technical comparisons (e.g. React vs Angular): give pros, cons, and clear recommendations.
+- Answer general questions accurately, helpfully, and concisely (e.g. "What is machine learning?", "What is the capital of Japan?").
+- Programming: Write clean, idiomatic code (Java, Python, JS, C++, etc.) with explanations and time/space complexity when applicable.
+- Technical comparisons (e.g. React vs Angular): give pros, cons, and recommendations.
 - Career guidance, roadmaps, project ideas, DSA strategies, and interview prep.
-- Memory: maintain conversational context across turns.
+- Memory & Follow-ups: maintain conversational context across turns (e.g. "Give me a simple example", "Explain in Hinglish").
 GUIDELINES:
-- Be concise, direct, and structured. Use Markdown (bold, lists, code blocks).
-- For simple questions, give crisp 1-2 paragraph answers. Avoid generic filler.${profileSnippet}`;
+- Be concise, direct, and structured. Use Markdown (bold text, lists, code blocks).
+- For simple questions, give crisp, clear answers without unnecessary filler.${profileSnippet}`;
 }
 
 /**
  * Normalizes message history into a sliding window of recent messages for Gemini.
- * Keeps at most `maxTurns` (default 10) to minimize latency and token overhead.
+ * Keeps at most `maxMessages` (default 10) to minimize latency and token overhead.
  */
 function prepareGeminiChatHistory(messages, maxMessages = 10) {
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -126,17 +126,13 @@ function prepareGeminiChatHistory(messages, maxMessages = 10) {
 }
 
 /**
- * Main chat handler: supports both streaming and non-streaming responses.
- * @param {Object} options
- * @param {Array} options.messages - conversation messages
- * @param {Object} options.profile - user profile (optional)
- * @param {Function} [options.onChunk] - optional callback for streaming chunks
- * @param {Object} [options.timing] - timing debug object
+ * Main chat handler: sends multi-turn chat to Gemini.
  */
-export async function getAIChatResponse({ messages, profile, onChunk, timing = {} }) {
-  const geminiKey = process.env.GEMINI_API_KEY;
-  const openaiKey = process.env.OPENAI_API_KEY;
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+export async function getAIChatResponse({ messages, profile, timing = {} }) {
+  // Clean keys (trim whitespace and strip any accidental surrounding quotes)
+  const geminiKey = (process.env.GEMINI_API_KEY || '').trim().replace(/^["']|["']$/g, '');
+  const openaiKey = (process.env.OPENAI_API_KEY || '').trim().replace(/^["']|["']$/g, '');
+  const anthropicKey = (process.env.ANTHROPIC_API_KEY || '').trim().replace(/^["']|["']$/g, '');
 
   if (!geminiKey && !openaiKey && !anthropicKey) {
     const err = new Error('AI_API_KEY_MISSING');
@@ -148,7 +144,7 @@ export async function getAIChatResponse({ messages, profile, onChunk, timing = {
 
   // Check in-memory cache for simple single-turn non-personalized queries
   const isSimpleSingleQuery = messages.length === 1 && (!profile || (!profile.name && !profile.skills));
-  if (isSimpleSingleQuery && !onChunk) {
+  if (isSimpleSingleQuery) {
     const cached = getCachedResponse(latestMsg);
     if (cached) {
       timing.cacheHit = true;
@@ -167,7 +163,6 @@ export async function getAIChatResponse({ messages, profile, onChunk, timing = {
       history,
       latestMessage,
       apiKey: geminiKey,
-      onChunk,
       timing
     });
 
@@ -185,9 +180,9 @@ export async function getAIChatResponse({ messages, profile, onChunk, timing = {
 }
 
 /**
- * Fast Gemini chat implementation supporting streaming and fast-fail model escalation.
+ * Fast Gemini chat execution with automatic model escalation
  */
-async function callFastGeminiChat({ systemPrompt, history, latestMessage, apiKey, onChunk, timing }) {
+async function callFastGeminiChat({ systemPrompt, history, latestMessage, apiKey, timing }) {
   const genAI = new GoogleGenerativeAI(apiKey);
   let lastError = null;
 
@@ -208,34 +203,13 @@ async function callFastGeminiChat({ systemPrompt, history, latestMessage, apiKey
         }
       });
 
-      if (typeof onChunk === 'function') {
-        // Streaming mode: yields chunks progressively
-        const result = await chat.sendMessageStream(latestMessage);
-        let fullText = '';
-        let firstChunkTime = null;
+      const result = await chat.sendMessage(latestMessage);
+      const response = await result.response;
+      const text = response.text();
+      timing.geminiMs = Date.now() - tStart;
 
-        for await (const chunk of result.stream) {
-          const chunkText = chunk.text();
-          if (!firstChunkTime) {
-            firstChunkTime = Date.now() - tStart;
-            timing.firstChunkMs = firstChunkTime;
-          }
-          fullText += chunkText;
-          onChunk(chunkText);
-        }
-
-        timing.geminiMs = Date.now() - tStart;
-        if (fullText.trim()) return fullText.trim();
-      } else {
-        // Non-streaming mode
-        const result = await chat.sendMessage(latestMessage);
-        const response = await result.response;
-        const text = response.text();
-        timing.geminiMs = Date.now() - tStart;
-
-        if (text && text.trim().length > 0) {
-          return text.trim();
-        }
+      if (text && text.trim().length > 0) {
+        return text.trim();
       }
     } catch (err) {
       const duration = Date.now() - tStart;
@@ -243,7 +217,11 @@ async function callFastGeminiChat({ systemPrompt, history, latestMessage, apiKey
       lastError = err;
 
       // Escalate to next model if model not found (404) or high demand / overloaded (503)
-      if (err.status === 404 || err.status === 503 || (err.message && (err.message.includes('not found') || err.message.includes('high demand')))) {
+      if (
+        err.status === 404 ||
+        err.status === 503 ||
+        (err.message && (err.message.includes('not found') || err.message.includes('high demand') || err.message.includes('overloaded')))
+      ) {
         continue;
       }
       throw err;
@@ -334,7 +312,7 @@ async function callAnthropicChat(systemPrompt, messages, apiKey) {
  * Fast Career Results enrichment with Gemini
  */
 export async function getAICareerEnrichment({ profile, topMatchName, matchPercentage, description }) {
-  const geminiKey = process.env.GEMINI_API_KEY;
+  const geminiKey = (process.env.GEMINI_API_KEY || '').trim().replace(/^["']|["']$/g, '');
   if (!geminiKey) throw new Error('NO_API_KEYS_CONFIGURED');
 
   const prompt = `Senior Career Coach. Respond ONLY with a raw JSON object with 3 keys:
