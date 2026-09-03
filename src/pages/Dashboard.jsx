@@ -5,18 +5,96 @@ import { CAREERS_DATA } from '../data/careersData';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import {
   User, Award, Milestone, Brain, BookOpen, Clock, Flame,
-  Terminal, ShieldCheck, ChevronRight, Activity, Zap
+  Terminal, ShieldCheck, ChevronRight, Activity, Zap, Loader2
 } from 'lucide-react';
 
-export default function Dashboard({ profile }) {
+export default function Dashboard({ profile, loading }) {
   const navigate = useNavigate();
-  const matches = calculateCareerMatches(profile, CAREERS_DATA);
+  const matches = profile ? calculateCareerMatches(profile, CAREERS_DATA) : [];
   const [roadmapProgress] = useLocalStorage('futurealign_roadmap', {});
   const [completedProjects] = useLocalStorage('futurealign_projects', {});
   const [quizAttempts] = useLocalStorage('futurealign_quiz', {});
 
-  if (matches.length === 0) {
-    return null; // App router will redirect to assessment, but guard just in case
+  // 1. If loading and profile is not yet available, show lightweight skeleton
+  if (loading && !profile) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 animate-pulse">
+        {/* Welcome Banner Skeleton */}
+        <div className="bg-slate-900 text-white rounded-2xl p-6 sm:p-8 shadow-sm mb-8 flex justify-between items-center">
+          <div className="space-y-2.5">
+            <div className="h-4 w-32 bg-slate-800 rounded"></div>
+            <div className="h-8 w-64 bg-slate-800 rounded"></div>
+            <div className="h-3.5 w-80 bg-slate-800 rounded"></div>
+          </div>
+          <div className="h-14 w-44 bg-slate-800 rounded-xl hidden sm:block"></div>
+        </div>
+
+        {/* 4 Metric Cards Skeleton */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm h-28 flex items-center space-x-4">
+              <div className="w-12 h-12 rounded-xl bg-slate-100 shrink-0"></div>
+              <div className="space-y-2 flex-grow">
+                <div className="h-3 w-20 bg-slate-100 rounded"></div>
+                <div className="h-4 w-28 bg-slate-100 rounded"></div>
+                <div className="h-3 w-16 bg-slate-100 rounded"></div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Content Skeleton */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-2 space-y-6">
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm h-36">
+              <div className="h-4 w-36 bg-slate-100 rounded mb-3"></div>
+              <div className="h-6 w-56 bg-slate-100 rounded mb-2"></div>
+              <div className="h-3 w-80 bg-slate-100 rounded"></div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm h-36">
+              <div className="h-4 w-40 bg-slate-100 rounded mb-4"></div>
+              <div className="flex gap-2">
+                <div className="h-7 w-20 bg-slate-100 rounded-lg"></div>
+                <div className="h-7 w-24 bg-slate-100 rounded-lg"></div>
+                <div className="h-7 w-20 bg-slate-100 rounded-lg"></div>
+              </div>
+            </div>
+          </div>
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm h-72">
+            <div className="h-4 w-36 bg-slate-100 rounded mb-6"></div>
+            <div className="space-y-3">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="h-10 bg-slate-50 rounded-xl"></div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. If finished loading and no profile exists, show clean assessment prompt
+  if (!profile || matches.length === 0) {
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-12 text-center">
+        <div className="bg-white border border-slate-200 rounded-2xl p-8 sm:p-12 max-w-lg mx-auto shadow-sm">
+          <div className="w-14 h-14 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto mb-5 border border-emerald-100">
+            <Brain className="h-7 w-7" />
+          </div>
+          <h2 className="text-xl font-extrabold text-slate-800 mb-2">Welcome to FutureAlign!</h2>
+          <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+            You haven't completed your career assessment yet. Complete the quick 2-minute assessment to unlock personalized career matching, skill gap analysis, and tailored learning roadmaps.
+          </p>
+          <Link
+            to="/assessment"
+            className="inline-flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm px-6 py-3 rounded-xl shadow transition-all"
+          >
+            <span>Start Career Assessment</span>
+            <ChevronRight className="h-4 w-4" />
+          </Link>
+        </div>
+      </div>
+    );
   }
 
   const topMatch = matches[0];
@@ -93,7 +171,7 @@ export default function Dashboard({ profile }) {
             <User className="h-5 w-5 text-emerald-400" />
             <div>
               <span className="text-[10px] text-slate-500 font-bold block uppercase">Degree & Stream</span>
-              <span className="text-xs font-bold">{profile.degree} • {profile.branch}</span>
+              <span className="text-xs font-bold">{profile.degree || 'Degree'} • {profile.branch || 'Tech'}</span>
             </div>
           </div>
         </div>

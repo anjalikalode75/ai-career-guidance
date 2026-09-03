@@ -1,5 +1,8 @@
 import { doc, getDoc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db } from '../firebase.js';
+
+// In-memory profile cache to prevent duplicate Firestore roundtrips
+const profileCache = new Map();
 
 /**
  * Saves/updates user profile inside Firestore document: users/{uid}
@@ -17,6 +20,14 @@ export async function saveUserProfile(uid, profileData) {
     if (data[key] === undefined) delete data[key];
   });
 
+  // Update memory and local storage cache immediately
+  profileCache.set(uid, data);
+  try {
+    localStorage.setItem(`futurealign_profile_${uid}`, JSON.stringify(data));
+  } catch (e) {
+    // Ignore local storage quota errors
+  }
+
   try {
     await setDoc(docRef, data, { merge: true });
   } catch (error) {
@@ -26,20 +37,56 @@ export async function saveUserProfile(uid, profileData) {
 }
 
 /**
- * Retrieves user profile document: users/{uid}
+ * Retrieves user profile document: users/{uid} with memory & local caching
  */
-export async function getUserProfile(uid) {
+export async function getUserProfile(uid, { forceRefresh = false } = {}) {
   if (!uid) return null;
+
+  // 1. Fast path: in-memory cache
+  if (!forceRefresh && profileCache.has(uid)) {
+    return profileCache.get(uid);
+  }
+
+  // 2. Fast path: localStorage cache
+  if (!forceRefresh) {
+    try {
+      const cached = localStorage.getItem(`futurealign_profile_${uid}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        profileCache.set(uid, parsed);
+        return parsed;
+      }
+    } catch (e) {
+      // Fall through to Firestore
+    }
+  }
+
+  // 3. Network path: Firestore with 5s timeout protection
   const docRef = doc(db, 'users', uid);
   try {
-    const docSnap = await getDoc(docRef);
+    const fetchPromise = getDoc(docRef);
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Firestore timeout')), 5000)
+    );
+    const docSnap = await Promise.race([fetchPromise, timeoutPromise]);
+
     if (docSnap.exists()) {
-      return docSnap.data();
+      const data = docSnap.data();
+      profileCache.set(uid, data);
+      try {
+        localStorage.setItem(`futurealign_profile_${uid}`, JSON.stringify(data));
+      } catch (e) {}
+      return data;
     }
     return null;
   } catch (error) {
-    console.error('Error reading user profile from Firestore:', error);
-    throw new Error('Failed to load profile details. Please try again.');
+    console.warn('Firestore getUserProfile error or timeout:', error.message);
+    // Fall back to cached local data if available
+    try {
+      const cached = localStorage.getItem(`futurealign_profile_${uid}`);
+      if (cached) return JSON.parse(cached);
+    } catch (e) {}
+    return null;
   }
 }
 
@@ -48,6 +95,11 @@ export async function getUserProfile(uid) {
  */
 export async function clearUserProfile(uid) {
   if (!uid) return;
+  profileCache.delete(uid);
+  try {
+    localStorage.removeItem(`futurealign_profile_${uid}`);
+  } catch (e) {}
+
   const docRef = doc(db, 'users', uid);
   try {
     await deleteDoc(docRef);

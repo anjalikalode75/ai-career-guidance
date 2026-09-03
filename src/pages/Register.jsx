@@ -12,18 +12,14 @@ export default function Register() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-
+  
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [successMsg, setSuccessMsg] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setErrorMsg('');
-    setSuccessMsg('');
-
-    if (!name.trim()) {
-      setErrorMsg('Full Name is required.');
+    if (!name.trim() || !email.trim() || !password.trim()) {
+      setErrorMsg('Please complete all required fields.');
       return;
     }
     if (password.length < 6) {
@@ -36,13 +32,12 @@ export default function Register() {
     }
 
     setLoading(true);
+    setErrorMsg('');
 
     try {
       await register(email, password, name.trim());
-      setSuccessMsg('Account created successfully! Preparing dashboard...');
-      setTimeout(() => {
-        navigate('/assessment');
-      }, 1000);
+      // Navigate immediately without artificial delays
+      navigate('/assessment', { replace: true });
     } catch (err) {
       setErrorMsg(err.message || 'Failed to register account.');
       setLoading(false);
@@ -64,13 +59,6 @@ export default function Register() {
           </div>
         )}
 
-        {successMsg && (
-          <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 text-xs px-4 py-3 rounded-lg flex items-start space-x-2.5 mb-6">
-            <span className="font-bold">✓</span>
-            <span>{successMsg}</span>
-          </div>
-        )}
-
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="name" className="block text-xs font-bold text-slate-700 uppercase mb-1.5">Full Name</label>
@@ -83,7 +71,7 @@ export default function Register() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-none"
-                placeholder="John Doe"
+                placeholder="Anjali Sharma"
                 disabled={loading}
               />
             </div>
@@ -100,7 +88,7 @@ export default function Register() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-none"
-                placeholder="john@college.edu"
+                placeholder="you@college.edu"
                 disabled={loading}
               />
             </div>
@@ -117,13 +105,13 @@ export default function Register() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full pl-10 pr-10 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-none"
-                placeholder="Min 6 characters"
+                placeholder="At least 6 characters"
                 disabled={loading}
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-450 hover:text-slate-655"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-450 hover:text-slate-650"
                 disabled={loading}
               >
                 {showPassword ? <EyeOff className="h-4.5 w-4.5" /> : <Eye className="h-4.5 w-4.5" />}
@@ -142,7 +130,7 @@ export default function Register() {
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 focus:outline-none"
-                placeholder="Retype password"
+                placeholder="Repeat your password"
                 disabled={loading}
               />
             </div>
@@ -151,12 +139,12 @@ export default function Register() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg text-sm shadow transition-all flex items-center justify-center space-x-1.5"
+            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg text-sm shadow transition-all flex items-center justify-center space-x-1.5 cursor-pointer"
           >
             {loading ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Registering account...</span>
+                <span>Creating account...</span>
               </>
             ) : (
               <span>Create Account</span>

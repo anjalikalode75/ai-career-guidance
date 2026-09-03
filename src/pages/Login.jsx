@@ -15,7 +15,6 @@ export default function Login() {
   
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [successMsg, setSuccessMsg] = useState('');
 
   // Intended location redirect
   const fromPath = location.state?.from?.pathname || '/dashboard';
@@ -29,14 +28,11 @@ export default function Login() {
 
     setLoading(true);
     setErrorMsg('');
-    setSuccessMsg('');
 
     try {
       await login(email, password);
-      setSuccessMsg('Successfully logged in! Redirecting...');
-      setTimeout(() => {
-        navigate(fromPath, { replace: true });
-      }, 1000);
+      // Navigate immediately without artificial delays
+      navigate(fromPath, { replace: true });
     } catch (err) {
       setErrorMsg(err.message || 'Failed to authenticate user.');
       setLoading(false);
@@ -55,13 +51,6 @@ export default function Login() {
           <div className="bg-rose-50 border border-rose-100 text-rose-800 text-xs px-4 py-3 rounded-lg flex items-start space-x-2.5 mb-6">
             <ShieldAlert className="h-4.5 w-4.5 text-rose-600 shrink-0 mt-0.5" />
             <span>{errorMsg}</span>
-          </div>
-        )}
-
-        {successMsg && (
-          <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 text-xs px-4 py-3 rounded-lg flex items-start space-x-2.5 mb-6">
-            <span className="font-bold">✓</span>
-            <span>{successMsg}</span>
           </div>
         )}
 
@@ -127,7 +116,7 @@ export default function Login() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg text-sm shadow transition-all flex items-center justify-center space-x-1.5"
+            className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-lg text-sm shadow transition-all flex items-center justify-center space-x-1.5 cursor-pointer"
           >
             {loading ? (
               <>

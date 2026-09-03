@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
@@ -21,54 +21,81 @@ import { useAuth } from './hooks/useAuth';
 import { getUserProfile, saveUserProfile, clearUserProfile } from './services/dbService';
 import { Loader2 } from 'lucide-react';
 
+// Lightweight in-page loader for secondary pages
+function PageLoader({ title = 'Loading...' }) {
+  return (
+    <div className="min-h-[50vh] flex items-center justify-center bg-slate-50">
+      <div className="text-center space-y-3">
+        <Loader2 className="h-8 w-8 text-emerald-600 animate-spin mx-auto" />
+        <p className="text-xs font-semibold text-slate-500">{title}</p>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const { user, loading: authLoading } = useAuth();
   const [profile, setProfile] = useState(null);
-  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(false);
   const [isDemoMode, setIsDemoMode] = useState(false);
+  const lastFetchedUidRef = useRef(null);
 
-  // Sync profile from Firestore when user changes
+  // Progressive profile synchronization
   useEffect(() => {
-    const fetchProfile = async () => {
-      if (user) {
-        setProfileLoading(true);
-        try {
-          const data = await getUserProfile(user.uid);
-          setProfile(data);
-          // If profile has a name like 'Demo Student', set demo mode true
-          if (data?.name === 'Demo Student') {
-            setIsDemoMode(true);
-          } else {
-            setIsDemoMode(false);
-          }
-        } catch (error) {
-          console.error('Error fetching profile:', error);
-        } finally {
-          setProfileLoading(false);
-        }
-      } else {
-        setProfile(null);
-        setIsDemoMode(false);
-        setProfileLoading(false);
-      }
-    };
+    if (authLoading) return;
 
-    if (!authLoading) {
-      fetchProfile();
+    if (user) {
+      // Prevent duplicate fetches for same user session
+      if (lastFetchedUidRef.current !== user.uid) {
+        lastFetchedUidRef.current = user.uid;
+
+        // 1. Instant cache load from localStorage (0ms transition)
+        try {
+          const cached = localStorage.getItem(`futurealign_profile_${user.uid}`);
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            setProfile(parsed);
+            setIsDemoMode(parsed?.name === 'Demo Student');
+            setProfileLoading(false);
+          } else {
+            setProfileLoading(true);
+          }
+        } catch (e) {
+          setProfileLoading(true);
+        }
+
+        // 2. Background fresh sync from Firestore
+        getUserProfile(user.uid)
+          .then((fresh) => {
+            if (fresh) {
+              setProfile(fresh);
+              setIsDemoMode(fresh?.name === 'Demo Student');
+            }
+          })
+          .catch((err) => {
+            console.warn('Background profile fetch notice:', err.message);
+          })
+          .finally(() => {
+            setProfileLoading(false);
+          });
+      }
+    } else {
+      // Clean up on logout
+      lastFetchedUidRef.current = null;
+      setProfile(null);
+      setIsDemoMode(false);
+      setProfileLoading(false);
     }
   }, [user, authLoading]);
 
   const updateProfileData = async (newProfile) => {
     if (!user) return;
-    setProfileLoading(true);
+    setProfile(newProfile); // optimistic update
     try {
       await saveUserProfile(user.uid, newProfile);
-      setProfile(newProfile);
     } catch (error) {
-      console.error(error);
+      console.error('Failed to save profile:', error);
       alert(error.message);
-    } finally {
-      setProfileLoading(false);
     }
   };
 
@@ -103,30 +130,27 @@ export default function App() {
 
   const clearProfile = async () => {
     if (!user) return;
-    setProfileLoading(true);
+    setProfile(null);
+    setIsDemoMode(false);
     try {
       await clearUserProfile(user.uid);
-      setProfile(null);
-      setIsDemoMode(false);
       window.localStorage.removeItem('futurealign_roadmap');
       window.localStorage.removeItem('futurealign_interview_score');
     } catch (error) {
-      console.error(error);
+      console.error('Failed to clear profile:', error);
       alert(error.message);
-    } finally {
-      setProfileLoading(false);
     }
   };
 
   const hasProfile = !!profile;
-  const isSyncing = authLoading || profileLoading;
 
-  if (isSyncing) {
+  // ONLY show cold-start loader while verifying initial auth session credentials (< 100ms)
+  if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
         <div className="text-center space-y-3">
-          <Loader2 className="h-10 w-10 text-emerald-600 animate-spin mx-auto" />
-          <p className="text-sm font-semibold text-slate-500">Synchronizing database profile...</p>
+          <Loader2 className="h-8 w-8 text-emerald-600 animate-spin mx-auto" />
+          <p className="text-xs font-semibold text-slate-400">Loading FutureAlign...</p>
         </div>
       </div>
     );
@@ -156,7 +180,7 @@ export default function App() {
               path="/dashboard"
               element={
                 <ProtectedRoute>
-                  {hasProfile ? <Dashboard profile={profile} /> : <Navigate to="/assessment" replace />}
+                  <Dashboard profile={profile} loading={profileLoading} />
                 </ProtectedRoute>
               }
             />
@@ -176,7 +200,13 @@ export default function App() {
               path="/results"
               element={
                 <ProtectedRoute>
-                  {hasProfile ? <CareerResults profile={profile} /> : <Navigate to="/assessment" replace />}
+                  {profileLoading ? (
+                    <PageLoader title="Loading career recommendations..." />
+                  ) : hasProfile ? (
+                    <CareerResults profile={profile} />
+                  ) : (
+                    <Navigate to="/assessment" replace />
+                  )}
                 </ProtectedRoute>
               }
             />
@@ -184,7 +214,13 @@ export default function App() {
               path="/roadmap"
               element={
                 <ProtectedRoute>
-                  {hasProfile ? <RoadmapPage profile={profile} /> : <Navigate to="/assessment" replace />}
+                  {profileLoading ? (
+                    <PageLoader title="Loading learning roadmap..." />
+                  ) : hasProfile ? (
+                    <RoadmapPage profile={profile} />
+                  ) : (
+                    <Navigate to="/assessment" replace />
+                  )}
                 </ProtectedRoute>
               }
             />
@@ -192,7 +228,13 @@ export default function App() {
               path="/skill-gap"
               element={
                 <ProtectedRoute>
-                  {hasProfile ? <SkillGapPage profile={profile} /> : <Navigate to="/assessment" replace />}
+                  {profileLoading ? (
+                    <PageLoader title="Analyzing skill gaps..." />
+                  ) : hasProfile ? (
+                    <SkillGapPage profile={profile} />
+                  ) : (
+                    <Navigate to="/assessment" replace />
+                  )}
                 </ProtectedRoute>
               }
             />
@@ -200,7 +242,13 @@ export default function App() {
               path="/projects"
               element={
                 <ProtectedRoute>
-                  {hasProfile ? <ProjectsPage profile={profile} /> : <Navigate to="/assessment" replace />}
+                  {profileLoading ? (
+                    <PageLoader title="Loading coding projects..." />
+                  ) : hasProfile ? (
+                    <ProjectsPage profile={profile} />
+                  ) : (
+                    <Navigate to="/assessment" replace />
+                  )}
                 </ProtectedRoute>
               }
             />
@@ -208,7 +256,13 @@ export default function App() {
               path="/interview"
               element={
                 <ProtectedRoute>
-                  {hasProfile ? <InterviewPrep profile={profile} /> : <Navigate to="/assessment" replace />}
+                  {profileLoading ? (
+                    <PageLoader title="Loading interview questions..." />
+                  ) : hasProfile ? (
+                    <InterviewPrep profile={profile} />
+                  ) : (
+                    <Navigate to="/assessment" replace />
+                  )}
                 </ProtectedRoute>
               }
             />
@@ -224,12 +278,7 @@ export default function App() {
               path="/settings"
               element={
                 <ProtectedRoute>
-                  {hasProfile ? (
-                    <SettingsPage clearProfile={clearProfile} />
-                  ) : (
-                    <Navigate to="/assessment" replace />
-                  )
-                }
+                  <SettingsPage clearProfile={clearProfile} />
                 </ProtectedRoute>
               }
             />
