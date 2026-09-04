@@ -69,11 +69,11 @@ export function calculateCareerMatches(profile, careersData) {
     }
 
     // 4. Education Match Score (10%)
-    const degreeMatch = career.degrees.includes(studentDegree) ? 100 : 50;
+    const degreeMatch = (career.degrees || []).includes(studentDegree) ? 100 : 50;
     let branchMatch = 30;
-    if (career.branches.includes(studentBranch)) {
+    if ((career.branches || []).includes(studentBranch)) {
       branchMatch = 100;
-    } else if (career.branches.includes('Other')) {
+    } else if ((career.branches || []).includes('Other')) {
       branchMatch = 70;
     }
     const educationScore = (degreeMatch * 0.4) + (branchMatch * 0.6);
@@ -150,9 +150,16 @@ export function calculateCareerMatches(profile, careersData) {
       description: career.description,
       difficulty: career.difficulty,
       estLearningTime: career.estLearningTime,
-      typicalRoles: career.typicalRoles,
-      requiredSkills: career.requiredSkills,
-      recommendedSkills: career.recommendedSkills,
+      typicalRoles: career.typicalRoles || [],
+      requiredSkills: career.requiredSkills || [],
+      recommendedSkills: career.recommendedSkills || [],
+      roadmap: career.roadmap || {
+        beginner: { title: 'Beginner Phase', topics: [] },
+        intermediate: { title: 'Intermediate Phase', topics: [] },
+        advanced: { title: 'Advanced Phase', topics: [] }
+      },
+      projects: career.projects || [],
+      interviewPrep: career.interviewPrep || [],
       breakdown: {
         skills: Math.round(skillsScore),
         interests: Math.round(interestsScore),
