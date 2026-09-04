@@ -97,19 +97,27 @@ export default function Dashboard({ profile, loading }) {
     );
   }
 
-  const topMatch = matches[0];
-  const careerId = topMatch.careerId;
+  const topMatch = matches[0] || {};
+  const careerId = topMatch.careerId || CAREERS_DATA[0]?.id || '';
+  const careerData = CAREERS_DATA.find((c) => c.id === careerId) || {};
+
+  // Safely resolve nested structures with robust fallbacks
+  const careerRoadmap = topMatch.roadmap || careerData.roadmap || {};
+  const careerProjects = topMatch.projects || careerData.projects || [];
+  const careerInterviewPrep = topMatch.interviewPrep || careerData.interviewPrep || [];
+  const requiredSkills = topMatch.requiredSkills || careerData.requiredSkills || [];
 
   // 1. Calculate Skill Completion %
-  const totalSkills = topMatch.requiredSkills.length;
-  const completedSkills = topMatch.requiredSkills.filter(s => profile.skills?.[s] !== undefined).length;
+  const totalSkills = requiredSkills.length;
+  const completedSkills = requiredSkills.filter((s) => profile?.skills?.[s] !== undefined).length;
   const skillCompletionPercentage = totalSkills > 0 ? Math.round((completedSkills / totalSkills) * 100) : 0;
 
   // 2. Calculate Roadmap Progress %
   let totalTopics = 0;
   let completedTopics = 0;
   ['beginner', 'intermediate', 'advanced'].forEach((stage) => {
-    const topics = topMatch.roadmap[stage]?.topics || [];
+    const stageData = careerRoadmap[stage] || {};
+    const topics = stageData.topics || [];
     totalTopics += topics.length;
     topics.forEach((_, idx) => {
       const status = roadmapProgress[`${careerId}-${stage}-${idx}`] || 'NOT_STARTED';
@@ -119,18 +127,18 @@ export default function Dashboard({ profile, loading }) {
   const roadmapProgressPercentage = totalTopics > 0 ? Math.round((completedTopics / totalTopics) * 100) : 0;
 
   // 3. Calculate Projects Completed Count
-  const totalProjects = topMatch.projects.length;
-  const completedProjectsCount = topMatch.projects.filter((_, idx) => completedProjects[`${careerId}-${idx}`]).length;
+  const totalProjects = careerProjects.length;
+  const completedProjectsCount = careerProjects.filter((_, idx) => completedProjects[`${careerId}-${idx}`]).length;
 
   // 4. Calculate Interview Score
-  let totalQuestions = topMatch.interviewPrep.length;
+  const totalQuestions = careerInterviewPrep.length;
   let understoodCount = 0;
-  topMatch.interviewPrep.forEach((_, idx) => {
+  careerInterviewPrep.forEach((_, idx) => {
     if (quizAttempts[`${careerId}-${idx}`] === 'UNDERSTOOD') understoodCount++;
   });
 
   // 5. Determine next recommended action
-  const missingSkills = topMatch.requiredSkills.filter(s => profile.skills?.[s] === undefined);
+  const missingSkills = requiredSkills.filter((s) => profile?.skills?.[s] === undefined);
   let nextActionTitle = 'Start learning core concepts';
   let nextActionDesc = 'Go to your roadmap and begin the beginner phase.';
   let nextActionLink = '/roadmap';

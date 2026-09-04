@@ -86,6 +86,7 @@ const handleEnrich = async (req, res) => {
 };
 
 apiRouter.post('/recommend/enrich', handleEnrich);
+apiRouter.post('/enrich', handleEnrich);
 
 // 2. AI Chatbot Coach Handler (Fast, reliable JSON)
 const handleChat = async (req, res) => {
@@ -144,10 +145,13 @@ const handleChat = async (req, res) => {
 
 apiRouter.post('/chat', handleChat);
 
-// Fallback: If POST body contains messages, treat as chat regardless of rewritten URL path
+// Fallback: If POST body contains messages or profile, route correctly regardless of rewritten URL path
 apiRouter.post('/', (req, res, next) => {
   if (req.body && Array.isArray(req.body.messages)) {
     return handleChat(req, res);
+  }
+  if (req.body && req.body.profile) {
+    return handleEnrich(req, res);
   }
   next();
 });
