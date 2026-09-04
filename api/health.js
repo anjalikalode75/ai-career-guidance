@@ -1,5 +1,3 @@
-import app from '../server/app.js';
-
 export default function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -10,5 +8,11 @@ export default function handler(req, res) {
     return res.end();
   }
 
-  return app(req, res);
+  res.statusCode = 200;
+  return res.json({
+    status: 'ok',
+    environment: process.env.NODE_ENV || 'production',
+    hasGeminiKey: !!(process.env.GEMINI_API_KEY || '').trim(),
+    time: new Date()
+  });
 }
