@@ -201,7 +201,7 @@ export default function ChatbotPage({ profile }) {
           setMessages(cleanHistory);
         } else {
           const greeting = profile
-            ? `Hello **${profile.name}**! I am your FutureAlign AI Career Coach. I've loaded your profile (${profile.degree || 'Degree'} in ${profile.branch || 'Tech'}). How can I help you today? You can ask me technical questions, roadmaps, code examples, interview prep, or general questions!`
+            ? `Hello **${profile.name}**! I am your FutureAlign AI Career Coach. How can I help you today? You can ask me general educational questions, technical concepts, programming problems, or ask for personalized career recommendations based on your profile!`
             : `Hello! I am your FutureAlign AI Career Coach. Feel free to ask me any technical question, programming problem, concept, or career guidance query!`;
           setMessages([{ role: 'assistant', content: greeting }]);
         }

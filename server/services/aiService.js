@@ -40,11 +40,104 @@ function setCachedResponse(query, response) {
 }
 
 /**
- * Compact, high-efficiency system prompt.
- * Fast to process, covers all required capabilities without bloated token size.
+ * Checks if text contains explicit personal signals referencing the user's profile, skills, or status.
  */
-function buildCompactSystemPrompt(profile) {
-  let profileSnippet = '';
+function hasExplicitPersonalSignal(text) {
+  const lower = (text || '').toLowerCase().trim();
+
+  return (
+    /\b(my profile|my account|my details|my resume|my assessment)\b/i.test(lower) ||
+    /\b(based on my|according to my|analyze my|check my)\b/i.test(lower) ||
+    /\b(my skills|my current skills|my knowledge|my strengths)\b/i.test(lower) ||
+    /\b(for me|suits? me|suited for me|fit for me|fits me|recommend for me|suggest for me|best for me)\b/i.test(lower) ||
+    /\b(after my b\.?tech|after my degree|after my graduation|for my placement|for my interview)\b/i.test(lower) ||
+    /\b(what should i learn for my career)\b/i.test(lower)
+  );
+}
+
+/**
+ * Checks if text is an educational transition question (like after 12th, 10th).
+ */
+function isSchoolOrGeneralEducation(text) {
+  const lower = (text || '').toLowerCase().trim();
+
+  return (
+    /\b(after 12th|after 12|after 10th|after 10|in 12th|in 10th|12th (pass|standard|commerce|science|arts|pcm|pcb|stream))\b/i.test(lower) ||
+    /\b(12th ke baad|10th ke baad|after intermediate|after plus two|after \+2)\b/i.test(lower)
+  );
+}
+
+/**
+ * Checks if text is a general conceptual, technical, or broad course question.
+ */
+function isGeneralConceptOrTechnical(text) {
+  const lower = (text || '').toLowerCase().trim();
+
+  return (
+    /^what (is|are|was|were)\b/i.test(lower) ||
+    /^(explain|describe|define|how does|how to|write|code for|compare|difference between)\b/i.test(lower) ||
+    /\b(what is bca|what is btech|what is bba|what is mba|what is mbbs|what is b\.?sc)\b/i.test(lower) ||
+    /\b(which programming language is best for beginners|best language for beginner|how to start coding|roadmap for web development)\b/i.test(lower)
+  );
+}
+
+/**
+ * Checks if text is an ambiguous open-ended career query (e.g. "Which career should I choose?").
+ */
+function isAmbiguousCareerQuery(text) {
+  const lower = (text || '').toLowerCase().trim();
+
+  return (
+    /\b(which career|what career|suggest a career|choose a career|pick a career|career advice|career suggestion)\b/i.test(lower) &&
+    !hasExplicitPersonalSignal(lower) &&
+    !isSchoolOrGeneralEducation(lower) &&
+    !isGeneralConceptOrTechnical(lower)
+  );
+}
+
+/**
+ * Detects whether the query intent is 'PERSONALIZED', 'GENERAL', or 'AMBIGUOUS'.
+ */
+export function detectQueryIntent(latestMessage = '', messages = [], profile = null) {
+  const text = (latestMessage || '').trim();
+
+  // 1. Explicit personal signal always takes precedence
+  if (hasExplicitPersonalSignal(text)) {
+    return 'PERSONALIZED';
+  }
+
+  // 2. School/12th/10th or general educational questions are strictly GENERAL
+  if (isSchoolOrGeneralEducation(text)) {
+    return 'GENERAL';
+  }
+
+  // 3. Technical concepts, definitions, programming questions are strictly GENERAL
+  if (isGeneralConceptOrTechnical(text)) {
+    return 'GENERAL';
+  }
+
+  // 4. Ambiguous broad career questions (e.g. "Which career should I choose?")
+  if (isAmbiguousCareerQuery(text)) {
+    return 'AMBIGUOUS';
+  }
+
+  // 5. Check if previous conversation turns established an active personalized context
+  if (messages && messages.length >= 3) {
+    const prevUserMsg = messages[messages.length - 3]?.content || '';
+    if (hasExplicitPersonalSignal(prevUserMsg) && !isSchoolOrGeneralEducation(text) && !isGeneralConceptOrTechnical(text)) {
+      return 'PERSONALIZED';
+    }
+  }
+
+  return 'GENERAL';
+}
+
+/**
+ * Compact, intent-aware system prompt.
+ * Treats user profile as contextual background, never misapplying it to general queries.
+ */
+function buildCompactSystemPrompt(profile, queryIntent = 'GENERAL') {
+  let profileSection = '';
 
   if (profile && (profile.name || profile.degree || profile.skills || profile.goal)) {
     const skills = profile.skills
@@ -54,19 +147,46 @@ function buildCompactSystemPrompt(profile) {
           .join(', ')
       : '';
 
-    profileSnippet = `\nSTUDENT CONTEXT: ${profile.name || 'Student'}, ${profile.degree || ''} ${profile.branch || ''} (${profile.year || ''}). Goal: ${profile.goal || 'Software Dev'}. Skills: ${skills || 'Beginner'}.`;
+    if (queryIntent === 'PERSONALIZED') {
+      profileSection = `
+STUDENT PROFILE (ACTIVE FOR THIS QUESTION):
+- Name: ${profile.name || 'Student'}
+- Degree & Stream: ${profile.degree || ''} in ${profile.branch || ''} (${profile.year || ''})
+- Target Goal: ${profile.goal || 'Software Engineer'}
+- Evaluated Skills: ${skills || 'Beginner'}
+- Strengths: ${Array.isArray(profile.strengths) ? profile.strengths.join(', ') : 'Problem Solving'}
+INSTRUCTION: The user explicitly requested personalized guidance. Tailor your answer specifically to their degree, year, skills, and goals.`;
+    } else if (queryIntent === 'AMBIGUOUS') {
+      profileSection = `
+SAVED STUDENT PROFILE (DO NOT ASSUME OR FORCE):
+- Stored Background: ${profile.degree || ''} ${profile.branch || ''} (${profile.year || ''})
+INSTRUCTION: The user's question is broad and ambiguous (e.g. "Which career should I choose?").
+1. DO NOT assume they are currently pursuing ${profile.degree || 'any specific degree'}.
+2. Provide a helpful high-level breakdown across major streams (Engineering/Tech, Management/Commerce, Design, etc.).
+3. Ask a brief, friendly clarification question asking for their 12th stream/degree, interests, or if they would like you to analyze their saved profile (${profile.degree || ''} in ${profile.branch || ''}).`;
+    } else {
+      // GENERAL mode
+      profileSection = `
+INSTRUCTION: The user is asking a GENERAL or EDUCATIONAL question.
+1. Answer GENERALLY, objectively, and comprehensively.
+2. DO NOT mention or assume the user's personal profile (degree, branch, year, or skills).
+3. If the user asks about 12th standard (e.g. "After 12th what career should I choose?"), outline the options across Science (PCM/PCB), Commerce, and Arts. DO NOT assume the user is already in college or studying B.Tech.
+4. For technical concepts (e.g. "What is Java?", "Explain inheritance in Java", "What is BCA?"), provide a direct, clear explanation without personal references.`;
+    }
   }
 
-  return `You are FutureAlign AI Career Coach, an intelligent, fast, knowledgeable, and practical tech mentor.
+  return `You are FutureAlign AI Career Coach, a professional, knowledgeable, practical, and helpful mentor for technology and career guidance.
 CAPABILITIES:
-- Answer general questions accurately, helpfully, and concisely (e.g. "What is machine learning?", "What is the capital of Japan?").
-- Programming: Write clean, idiomatic code (Java, Python, JS, C++, etc.) with explanations and time/space complexity when applicable.
-- Technical comparisons (e.g. React vs Angular): give pros, cons, and recommendations.
-- Career guidance, roadmaps, project ideas, DSA strategies, and interview prep.
-- Memory & Follow-ups: maintain conversational context across turns (e.g. "Give me a simple example", "Explain in Hinglish").
-GUIDELINES:
-- Be concise, direct, and structured. Use Markdown (bold text, lists, code blocks).
-- For simple questions, give crisp, clear answers without unnecessary filler.${profileSnippet}`;
+- Educational Transitions: Provide objective overviews of options after 10th, 12th, or graduation across all streams (Science/PCM/PCB, Commerce, Arts).
+- Technical & Programming: Write clean, idiomatic code with explanations and time/space complexity (Java, Python, JS, C++, SQL, DSA, DBMS).
+- Tech Comparisons: Impartial pros/cons and career relevance.
+- Career Guidance & Roadmaps: Clear learning pathways, project suggestions, and interview preparation.
+- Multi-turn Memory: Follow up naturally on context across turns.
+
+CRITICAL RULES:
+1. PROFILE INDEPENDENCE: The student profile is contextual background data, NOT the subject of every question. Use it ONLY when the user explicitly asks for personal guidance (e.g. "based on my profile", "my skills", "for me").
+2. NO FALSE ASSUMPTIONS: When the user asks general or 12th-grade questions, NEVER say "Since you are in 3rd year B.Tech...", "As a computer science student...", or "Based on your profile...".
+3. CONCISE & STRUCTURED: Use clean Markdown (bold text, bullet lists, code blocks). Answer directly without filler.${profileSection}`;
 }
 
 /**
@@ -142,8 +262,11 @@ export async function getAIChatResponse({ messages, profile, timing = {} }) {
 
   const latestMsg = messages[messages.length - 1]?.content?.trim() || '';
 
+  const queryIntent = detectQueryIntent(latestMsg, messages, profile);
+  timing.queryIntent = queryIntent;
+
   // Check in-memory cache for simple single-turn non-personalized queries
-  const isSimpleSingleQuery = messages.length === 1 && (!profile || (!profile.name && !profile.skills));
+  const isSimpleSingleQuery = messages.length === 1 && queryIntent === 'GENERAL';
   if (isSimpleSingleQuery) {
     const cached = getCachedResponse(latestMsg);
     if (cached) {
@@ -153,7 +276,7 @@ export async function getAIChatResponse({ messages, profile, timing = {} }) {
   }
 
   const tPrep0 = Date.now();
-  const systemPrompt = buildCompactSystemPrompt(profile);
+  const systemPrompt = buildCompactSystemPrompt(profile, queryIntent);
   const { history, latestMessage } = prepareGeminiChatHistory(messages, 10);
   timing.contextPrepMs = Date.now() - tPrep0;
 
